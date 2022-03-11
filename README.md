@@ -21,5 +21,5 @@ This repository will take on a **research focus** by including:
   - Measure Generalization on Target Task(s) (i.e. Success and Failure Cases)
 - Written Analyses 📝
   - Descriptions of the methods
-  - Discussion of findings
-  - Future work that has/could be done
+  - Discussion of findings from case studies
+  - Future work that has been/could be done
