@@ -1,180 +1,215 @@
-'''
-NeRF Model Definition and Helper Functions
-'''
-from json import encoder
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+
+# Misc
+def img2mse(x, y): return torch.mean((x - y) ** 2)
+def mse2psnr(x): return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+
+
+def to8b(x): return (255*np.clip(x, 0, 1)).astype(np.uint8)
+
+
+# Positional encoding (section 5.1)
+class Embedder:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.create_embedding_fn()
+
+    def create_embedding_fn(self):
+        embed_fns = []
+        d = self.kwargs['input_dims']
+        out_dim = 0
+        if self.kwargs['include_input']:
+            embed_fns.append(lambda x: x)
+            out_dim += d
+
+        max_freq = self.kwargs['max_freq_log2']
+        N_freqs = self.kwargs['num_freqs']
+
+        if self.kwargs['log_sampling']:
+            freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
+        else:
+            freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
+
+        for freq in freq_bands:
+            for p_fn in self.kwargs['periodic_fns']:
+                embed_fns.append(lambda x, p_fn=p_fn,
+                                 freq=freq: p_fn(x * freq))
+                out_dim += d
+
+        self.embed_fns = embed_fns
+        self.out_dim = out_dim
+
+    def embed(self, inputs):
+        return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
+
+
+def get_embedder(multires, i=0):
+    if i == -1:
+        return nn.Identity(), 3
+
+    embed_kwargs = {
+        'include_input': True,
+        'input_dims': 3,
+        'max_freq_log2': multires-1,
+        'num_freqs': multires,
+        'log_sampling': True,
+        'periodic_fns': [torch.sin, torch.cos],
+    }
+
+    embedder_obj = Embedder(**embed_kwargs)
+    def embed(x, eo=embedder_obj): return eo.embed(x)
+    return embed, embedder_obj.out_dim
+
+
+# Model
 class NeRF(nn.Module):
-    def __init__(self, num_layers=8, num_units=128, in_channels=3, in_views=3, out_channels=4, skips=[4], use_viewdirs=False):
+    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
+        """ 
+        """
         super(NeRF, self).__init__()
-        self.num_layers = num_layers
-        self.num_units = num_units
-        self.in_channels = in_channels
-        self.in_views = in_views
-        self.out_channels = out_channels
+        self.D = D
+        self.W = W
+        self.input_ch = input_ch
+        self.input_ch_views = input_ch_views
         self.skips = skips
         self.use_viewdirs = use_viewdirs
 
-        self.linear_layers = nn.ModuleList(
-            [nn.Linear(self.in_channels, self.num_units)] + [nn.Linear(self.num_units, self.num_units)
-            if layer not in self.skips else nn.Linear(self.num_units + self.in_channels, self.num_units) for layer in range(self.num_layers-1)]
-        )
+        self.pts_linears = nn.ModuleList(
+            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
 
-        self.linear_views = nn.ModuleList([nn.Linear(self.in_channels + self.num_units, self.num_units // 2)])
+        # Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
+        self.views_linears = nn.ModuleList(
+            [nn.Linear(input_ch_views + W, W//2)])
 
-        if self.use_viewdirs:
-            self.linear_feature = nn.Linear(self.num_units, self.num_units)
-            self.linear_alpha = nn.Linear(self.num_units, 1)
-            self.linear_rgb = nn.Linear(self.num_units // 2, 3)
+        if use_viewdirs:
+            self.feature_linear = nn.Linear(W, W)
+            self.alpha_linear = nn.Linear(W, 1)
+            self.rgb_linear = nn.Linear(W//2, 3)
         else:
-            self.linear_output = nn.Linear(self.num_units, self.out_channels)
-    
+            self.output_linear = nn.Linear(W, output_ch)
+
     def forward(self, x):
-        input_points, input_views = torch.split(x, [self.in_channels, self.in_views], dim=-1)
-        h = input_points
-
-        for idx, layer in enumerate(self.linear_layers):
-            h = self.linear_layers[idx](h)
+        input_pts, input_views = torch.split(
+            x, [self.input_ch, self.input_ch_views], dim=-1)
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = self.pts_linears[i](h)
             h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([input_pts, h], -1)
 
-            if idx in self.skips:
-                h = torch.cat([input_points, h], -1)
-        
         if self.use_viewdirs:
-            alpha = self.linear_alpha(h)
-            feature = self.linear_feature(h)
+            alpha = self.alpha_linear(h)
+            feature = self.feature_linear(h)
             h = torch.cat([feature, input_views], -1)
 
-            for idx, layer in enumerate(self.linear_views):
-                h = self.linear_views[idx](h)
+            for i, l in enumerate(self.views_linears):
+                h = self.views_linears[i](h)
                 h = F.relu(h)
 
-            rgb = self.linear_rgb(h)
+            rgb = self.rgb_linear(h)
             outputs = torch.cat([rgb, alpha], -1)
         else:
-            outputs = self.linear_output(h)
-        
+            outputs = self.output_linear(h)
+
         return outputs
 
+# Ray helpers
+def get_rays(H, W, K, c2w):
+    # pytorch's meshgrid has indexing='ij'
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
+    i = i.t()
+    j = j.t()
+    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2]) /
+                       K[1][1], -torch.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3, :3], -1)
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = c2w[:3, -1].expand(rays_d.shape)
+    return rays_o, rays_d
 
-class PositionalEncoder():
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-        self.encoder_function()
-    
-    def encoder_function(self):
-        encoder_functions = []
-        input_dims = self.kwargs["input_dims"]
-        out_dims = 0
 
-        if self.kwargs["include_input"]:
-            encoder_functions.append(lambda p : p)
-            out_dims += input_dims
-        
-        max_freq_log2 = self.kwargs["max_freq_log2"]
-        num_freqs = self.kwargs["num_freqs"]
+def get_rays_np(H, W, K, c2w):
+    i, j = np.meshgrid(np.arange(W, dtype=np.float32),
+                       np.arange(H, dtype=np.float32), indexing='xy')
+    dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2]) /
+                    K[1][1], -np.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3, :3], -1)
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = np.broadcast_to(c2w[:3, -1], np.shape(rays_d))
+    return rays_o, rays_d
 
-        if self.kwargs["log_sampling"]:
-            frequency_bands = 2.0 ** torch.linspace(start=0.0, end=max_freq_log2, steps=num_freqs)
+
+def ndc_rays(H, W, focal, near, rays_o, rays_d):
+    # Shift ray origins to near plane
+    t = -(near + rays_o[..., 2]) / rays_d[..., 2]
+    rays_o = rays_o + t[..., None] * rays_d
+
+    # Projection
+    o0 = -1./(W/(2.*focal)) * rays_o[..., 0] / rays_o[..., 2]
+    o1 = -1./(H/(2.*focal)) * rays_o[..., 1] / rays_o[..., 2]
+    o2 = 1. + 2. * near / rays_o[..., 2]
+
+    d0 = -1./(W/(2.*focal)) * \
+        (rays_d[..., 0]/rays_d[..., 2] - rays_o[..., 0]/rays_o[..., 2])
+    d1 = -1./(H/(2.*focal)) * \
+        (rays_d[..., 1]/rays_d[..., 2] - rays_o[..., 1]/rays_o[..., 2])
+    d2 = -2. * near / rays_o[..., 2]
+
+    rays_o = torch.stack([o0, o1, o2], -1)
+    rays_d = torch.stack([d0, d1, d2], -1)
+
+    return rays_o, rays_d
+
+
+# Hierarchical sampling (section 5.2)
+def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
+    # Get pdf
+    weights = weights + 1e-5  # prevent nans
+    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    cdf = torch.cumsum(pdf, -1)
+    # (batch, len(bins))
+    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
+
+    # Take uniform samples
+    if det:
+        u = torch.linspace(0., 1., steps=N_samples)
+        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+    else:
+        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+
+    # Pytest, overwrite u with numpy's fixed random numbers
+    if pytest:
+        np.random.seed(0)
+        new_shape = list(cdf.shape[:-1]) + [N_samples]
+        if det:
+            u = np.linspace(0., 1., N_samples)
+            u = np.broadcast_to(u, new_shape)
         else:
-            frequency_bands = torch.linspace(start=1.0, end=2.0 ** max_freq_log2, steps=num_freqs)
-        
-        for frequency in frequency_bands:
-            for fn in self.kwargs["periodic_functions"]:
-                encoder_functions.append(lambda p, fn=fn, f=frequency : fn(p * f))
-                out_dims += input_dims
-        
-        self.encoder_functions = encoder_functions
-        self.out_dims = out_dims
-    
-    def encode(self, x):
-        return torch.cat([fn(x) for fn in self.encoder_functions], -1)
+            u = np.random.rand(*new_shape)
+        u = torch.Tensor(u)
 
+    # Invert CDF
+    u = u.contiguous()
+    inds = torch.searchsorted(cdf, u, right=True)
+    below = torch.max(torch.zeros_like(inds-1), inds-1)
+    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
 
-def positional_encoding_embeddings(multires):
-    
-    encoder_kwargs = {
-        "include_input": True,
-        "input_dims": 3,
-        "max_freq_log2": multires - 1,
-        "num_freqs": multires,
-        "log_sampling": True,
-        "periodic_functions": [torch.sin, torch.cos]
-    }
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
 
-    position_encoder = PositionalEncoder(**encoder_kwargs)
-    encode = lambda input, encoder=position_encoder : encoder.encode(input)
+    denom = (cdf_g[..., 1]-cdf_g[..., 0])
+    denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
+    t = (u-cdf_g[..., 0])/denom
+    samples = bins_g[..., 0] + t * (bins_g[..., 1]-bins_g[..., 0])
 
-    return encode, position_encoder.out_dims
-
-def batchify(function, chunk):
-    if chunk is None:
-        return function
-
-    def ret(inputs):
-        return torch.cat([function(inputs[idx:idx+chunk]) for idx in range(0, inputs.shape[0], chunk)], 0)
-    
-    return ret
-        
-
-def run_nerf(inputs, view_directions, function, encode_function, encode_directions_function, chunk=1024*64):
-    flat_inputs = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    encoded = encode_function(flat_inputs)
-
-    if view_directions:
-        input_directions = view_directions[:, None].expand(inputs.shape)
-        flat_input_directions = torch.reshape(input_directions, [-1, input_directions.shape[-1]])
-        encoded_directions = encode_directions_function(flat_input_directions)
-        encoded = torch.cat([encoded, encoded_directions], -1)
-    
-    flat_outputs = batchify(function, chunk)(encoded)
-    outputs = torch.reshape(flat_outputs, list(inputs.shape[:-1]) + [flat_outputs.shape[-1]])
-
-    return outputs
-
-
-def build_nerf(view_directions=True, fine_samples_per_ray=128):
-    encoding_fn, in_channels = positional_encoding_embeddings(multires=10)
-    in_channel_views = 0
-    encoding_fn_view_directions = None
-
-    if view_directions:
-        encoding_fn_view_directions, in_channel_views = positional_encoding_embeddings(multires=4)
-    
-    out_channels = 5 if fine_samples_per_ray > 0 else 4
-
-    coarse_nerf = NeRF(out_channels=out_channels, in_views=in_channel_views).to("cuda")
-    grad_params = list(coarse_nerf.parameters())
-
-    fine_nerf = None
-    
-    if fine_samples_per_ray > 0:
-        fine_nerf = NeRF(out_channels=out_channels, in_views=in_channel_views).to("cuda")
-        grad_params += list(fine_nerf.parameters())
-    
-    model_query_fn = lambda inputs, view_directions, model_fn : run_nerf(inputs, view_directions, model_fn, encoding_fn,
-                                                                         encoding_fn_view_directions, chunk=1024*64)
-    
-    optimizer = torch.optim.Adam(params=grad_params, lr=5e-4, betas=(0.9, 0.999))
-
-    start = 0
-
-    render_kwargs_train = {
-        "model_query_fn": model_query_fn,
-        "perturb_jitter": 1.0,
-        "fine_samples_per_ray": fine_samples_per_ray,
-        "fine_nerf": fine_nerf,
-        "coarse_samples_per_ray": 64,
-        "coarse_nerf": coarse_nerf,
-        "use_viewdirs": view_directions,
-        "white_background": True,
-        "raw_noise_std": 0.0
-    }
-
-    render_kwargs_test = {k: render_kwargs_train[k] for k in render_kwargs_train}
-    render_kwargs_test["perturb_jitter"] = 0.0
-    
-    return render_kwargs_train, render_kwargs_test, start, grad_params, optimizer
+    return samples
