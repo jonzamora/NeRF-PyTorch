@@ -12,11 +12,13 @@ def get_data(args):
     img_fnames = sorted(glob.glob(img_dir))
     train_im_names = sorted([file for file in img_fnames if "train" in file])
     val_im_names = sorted([file for file in img_fnames if "val" in file])
+    val_im_names = [val_im_names[0], val_im_names[48], val_im_names[99]]
     test_im_names = sorted([file for file in img_fnames if "test" in file])
 
     pose_fnames = sorted(glob.glob(poses_dir))
     train_pose_names = sorted([file for file in pose_fnames if "train" in file])
     val_pose_names = sorted([file for file in pose_fnames if "val" in file])
+    val_pose_names = [val_pose_names[0], val_pose_names[48], val_pose_names[99]]
     test_pose_names = ["./data/bottles/pose/2_test_0000.txt", 
                        "./data/bottles/pose/2_test_0016.txt",
                        "./data/bottles/pose/2_test_0055.txt", 
@@ -26,6 +28,10 @@ def get_data(args):
     if len(test_im_names) < len(test_pose_names):
         diff = len(test_pose_names) - len(test_im_names)
         test_im_names += [None] * diff
+    
+    if len(val_im_names) < len(val_pose_names):
+        diff = len(val_pose_names) - len(val_im_names)
+        val_im_names += [None] * diff
     
     im_fnames = train_im_names + val_im_names + test_im_names
     pose_fnames = train_pose_names + val_pose_names + test_pose_names
@@ -43,7 +49,7 @@ def get_data(args):
     images = np.array(images).astype(np.float32)
     
     if args.white_bkgd:
-        images = images[..., :3]* images[..., -1:] + (1. - images[..., -1:])
+        images = images[..., :3] * images[..., -1:] + (1. - images[..., -1:])
     else:
         images = images[..., :3]
 
@@ -52,7 +58,8 @@ def get_data(args):
     for file in pose_fnames:
         if file is not None:
             pose = np.loadtxt(file)
-            poses.append(pose)
+            pose[:, 1:3] *= -1
+            poses.append(pose.tolist())
     
     poses = np.array(poses).astype(np.float32)
     

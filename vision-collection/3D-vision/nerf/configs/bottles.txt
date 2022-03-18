@@ -1,4 +1,4 @@
-expname = bottles_test_jon
+expname = bottles_test_1
 basedir = ./logs
 datadir = ./data/bottles
 dataset_type = pictures

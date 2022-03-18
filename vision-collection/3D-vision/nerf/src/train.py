@@ -614,13 +614,9 @@ def main(args):
             print('Saved checkpoints at', path)
 
         if i % args.i_video == 0 and i > 0:
-            # Turn on testing mode
-            print(f"[testing] at i={i}")
-
+            # Turn on testing mode for video
             with torch.no_grad():
                 rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
-
-            print('Done, saving', rgbs.shape, disps.shape)
 
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
 
@@ -628,16 +624,31 @@ def main(args):
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
         if i % args.i_testset == 0 and i > 0:
+            # validation
+            val_images = images[val_split]
+            val_images = np.stack(val_images, 0)
+
+            valsavedir = os.path.join(basedir, expname, 'valset_{:06d}'.format(i))
+            os.makedirs(valsavedir, exist_ok=True)
+
+            with torch.no_grad():
+                rgbs, disps = render_path(torch.Tensor(poses[val_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=valsavedir)
+            
+            val_loss = img2mse(rgbs, val_images)
+            val_psnr = mse2psnr(val_loss)
+
+            tqdm.write(f"[VAL] iter={i}, val_loss={val_loss.item()}, val_psnr={val_psnr.item()}")
+
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
 
             with torch.no_grad():
                 render_path(torch.Tensor(poses[test_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=testsavedir)
             
-            print('=> Saved test set')
+
 
         if i % args.i_print == 0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            tqdm.write(f"[TRAIN] iter={i}, train_loss={loss.item()}, train_psnr={psnr.item()}")
 
         global_step += 1
 
