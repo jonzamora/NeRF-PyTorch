@@ -2,3 +2,4 @@ data/
 tiny_nerf_data.npz
 wandb/
 logs/
+gitkey.txt
