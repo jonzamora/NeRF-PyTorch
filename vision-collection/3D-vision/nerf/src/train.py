@@ -1,13 +1,3 @@
-import os
-import sys
-import numpy as np
-import imageio
-import json
-import random
-import time
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import tqdm, trange
 from utils.get_args import get_args
 import json
@@ -15,6 +5,13 @@ import wandb
 from model import *
 from utils.get_args import get_args
 from utils.get_data import get_data
+import os
+import numpy as np
+import imageio
+import json
+import time
+import torch
+import torch.nn.functional as F
 
 DEBUG = False
 
@@ -294,7 +291,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = torch.Tensor(noise)
 
     alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-    # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
+
     weights = alpha * \
         torch.cumprod(
             torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
