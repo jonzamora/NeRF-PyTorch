@@ -211,26 +211,26 @@ def create_nerf(args):
 
     ##########################
 
-    # Load checkpoints
-    if args.ft_path is not None and args.ft_path != 'None':
-        ckpts = [args.ft_path]
-    else:
-        ckpts = [os.path.join(basedir, expname, f) for f in sorted(
-            os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
+    # # Load checkpoints
+    # if args.ft_path is not None and args.ft_path != 'None':
+    #     ckpts = [args.ft_path]
+    # else:
+    #     ckpts = [os.path.join(basedir, expname, f) for f in sorted(
+    #         os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
 
-    print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
+    # print('Found ckpts', ckpts)
+    # if len(ckpts) > 0 and not args.no_reload:
+    #     ckpt_path = ckpts[-1]
+    #     print('Reloading from', ckpt_path)
+    #     ckpt = torch.load(ckpt_path)
 
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    #     start = ckpt['global_step']
+    #     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
-        # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
-        if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+    #     # Load model
+    #     model.load_state_dict(ckpt['network_fn_state_dict'])
+    #     if model_fine is not None:
+    #         model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
     ##########################
 
@@ -515,7 +515,7 @@ def main(args):
     wandb.init(project="nerf",
                entity="jonzamora",
                group="official-pytorch",
-               job_type="training")
+               job_type=f"training-iterations={args.n_iters}_netwidth={args.netwidth}")
 
     N_iters = args.n_iters + 1
     print('=> Start Training NeRF')
