@@ -3,16 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-
-# Misc
+# GENERAL HELPERS
 def img2mse(x, y): return torch.mean((x - y) ** 2)
 def mse2psnr(x): return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
-
-
 def to8b(x): return (255*np.clip(x, 0, 1)).astype(np.uint8)
 
 
-# Positional encoding (section 5.1)
+# POSITIONAL ENCODING
 class Embedder:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -65,7 +62,7 @@ def get_embedder(multires, i=0):
     return embed, embedder_obj.out_dim
 
 
-# Model
+# NERF MODEL
 class NeRF(nn.Module):
     def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
         """ 
@@ -79,11 +76,10 @@ class NeRF(nn.Module):
         self.use_viewdirs = use_viewdirs
 
         self.pts_linears = nn.ModuleList(
-            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
+            [nn.Linear(input_ch, W)] + 
+            [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
 
-        # Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
-        self.views_linears = nn.ModuleList(
-            [nn.Linear(input_ch_views + W, W//2)])
+        self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W, W//2)])
 
         if use_viewdirs:
             self.feature_linear = nn.Linear(W, W)
@@ -93,8 +89,7 @@ class NeRF(nn.Module):
             self.output_linear = nn.Linear(W, output_ch)
 
     def forward(self, x):
-        input_pts, input_views = torch.split(
-            x, [self.input_ch, self.input_ch_views], dim=-1)
+        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
@@ -118,19 +113,20 @@ class NeRF(nn.Module):
 
         return outputs
 
-# Ray helpers
+# RAY HELPERS
 def get_rays(H, W, K, c2w):
-    # pytorch's meshgrid has indexing='ij'
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
     i = i.t()
     j = j.t()
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2]) /
                        K[1][1], -torch.ones_like(i)], -1)
-    # Rotate ray directions from camera frame to the world frame
-    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+
+    # Rotate ray directions from camera frame to the world frame with dot product, equals to: [c2w.dot(dir) for dir in dirs]
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3, :3], -1)
+    
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = c2w[:3, -1].expand(rays_d.shape)
+    
     return rays_o, rays_d
 
 
@@ -139,11 +135,12 @@ def get_rays_np(H, W, K, c2w):
                        np.arange(H, dtype=np.float32), indexing='xy')
     dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2]) /
                     K[1][1], -np.ones_like(i)], -1)
-    # Rotate ray directions from camera frame to the world frame
-    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Rotate ray directions from camera frame to the world frame with dot product, equals to: [c2w.dot(dir) for dir in dirs]
     rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3, :3], -1)
+
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = np.broadcast_to(c2w[:3, -1], np.shape(rays_d))
+
     return rays_o, rays_d
 
 
@@ -169,13 +166,12 @@ def ndc_rays(H, W, focal, near, rays_o, rays_d):
     return rays_o, rays_d
 
 
-# Hierarchical sampling (section 5.2)
+# HIERARCHICAL SAMPLING
 def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     # Get pdf
     weights = weights + 1e-5  # prevent nans
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
-    # (batch, len(bins))
     cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
 
     # Take uniform samples
