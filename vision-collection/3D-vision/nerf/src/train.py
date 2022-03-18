@@ -11,8 +11,7 @@ import torch.nn.functional as F
 from tqdm import tqdm, trange
 from utils.get_args import get_args
 import json
-import matplotlib.pyplot as plt
-
+import wandb
 from model import *
 from utils.get_args import get_args
 from utils.get_data import get_data
@@ -512,6 +511,12 @@ def main(args):
     if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(args.device)
 
+    # Weights and Biases for logging experiment results
+    wandb.init(project="nerf",
+               entity="jonzamora",
+               group="official-pytorch",
+               job_type="training")
+
     N_iters = args.n_iters + 1
     print('=> Start Training NeRF')
     print('TRAIN views are', train_split)
@@ -613,15 +618,15 @@ def main(args):
             }, path)
             print('Saved checkpoints at', path)
 
-        if i % args.i_video == 0 and i > 0:
-            # Turn on testing mode for video
-            with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+        # if i % args.i_video == 0 and i > 0:
+        #     # Turn on testing mode for video
+        #     with torch.no_grad():
+        #         rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
 
-            moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+        #     moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
 
-            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+        #     imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+        #     imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
         if i % args.i_testset == 0 and i > 0:
             # validation
@@ -634,21 +639,25 @@ def main(args):
             with torch.no_grad():
                 rgbs, disps = render_path(torch.Tensor(poses[val_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=valsavedir)
             
-            val_loss = img2mse(rgbs, val_images)
+            val_loss = img2mse(torch.Tensor(rgbs).to(args.device), torch.Tensor(val_images).to(args.device))
             val_psnr = mse2psnr(val_loss)
 
             tqdm.write(f"[VAL] iter={i}, val_loss={val_loss.item()}, val_psnr={val_psnr.item()}")
+            wandb.log({"val_loss": val_loss.item(), "val_psnr": val_psnr.item()}, step=global_step)
+
+            wandb.log({"val_render": wandb.Image(image) for image in rgbs}, step=global_step)
 
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
 
             with torch.no_grad():
-                render_path(torch.Tensor(poses[test_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=testsavedir)
-            
+                rgbs, disps = render_path(torch.Tensor(poses[test_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=testsavedir)
+            wandb.log({"test_render": wandb.Image(image) for image in rgbs}, step=global_step)
 
 
         if i % args.i_print == 0:
             tqdm.write(f"[TRAIN] iter={i}, train_loss={loss.item()}, train_psnr={psnr.item()}")
+            wandb.log({"train_loss": loss.item(), "train_psnr": psnr.item()}, step=global_step)
 
         global_step += 1
 

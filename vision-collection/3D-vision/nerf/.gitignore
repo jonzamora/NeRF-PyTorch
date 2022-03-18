@@ -1,2 +1,4 @@
 data/
 tiny_nerf_data.npz
+wandb/
+logs/
