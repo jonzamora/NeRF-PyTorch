@@ -10,7 +10,7 @@ You'll first want to create a conda environment via the following commands
 
 ```
 conda env create -f environment.yaml
-conda activate tdmpc
+conda activate torch
 ```
 
 This will ensure you have the proper dependencies for reproducing my experiment results, otherwise, the results may not be consistent. Something else to consider is that my `environment.yaml` file is not minimal, as it contains all my package dependencies for Deep Learning experiments across several domains.
