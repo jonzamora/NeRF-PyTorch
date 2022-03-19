@@ -208,26 +208,26 @@ def create_nerf(args):
 
     ##########################
 
-    # # Load checkpoints
-    # if args.ft_path is not None and args.ft_path != 'None':
-    #     ckpts = [args.ft_path]
-    # else:
-    #     ckpts = [os.path.join(basedir, expname, f) for f in sorted(
-    #         os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
+    # Load checkpoints
+    if args.ft_path is not None and args.ft_path != 'None':
+        ckpts = [args.ft_path]
+    else:
+        ckpts = [os.path.join(basedir, expname, f) for f in sorted(
+            os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
 
-    # print('Found ckpts', ckpts)
-    # if len(ckpts) > 0 and not args.no_reload:
-    #     ckpt_path = ckpts[-1]
-    #     print('Reloading from', ckpt_path)
-    #     ckpt = torch.load(ckpt_path)
+    print('Found ckpts', ckpts)
+    if len(ckpts) > 0 and not args.no_reload:
+        ckpt_path = ckpts[-1]
+        print('Reloading from', ckpt_path)
+        ckpt = torch.load(ckpt_path)
 
-    #     start = ckpt['global_step']
-    #     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        start = ckpt['global_step']
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
-    #     # Load model
-    #     model.load_state_dict(ckpt['network_fn_state_dict'])
-    #     if model_fine is not None:
-    #         model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+        # Load model
+        model.load_state_dict(ckpt['network_fn_state_dict'])
+        if model_fine is not None:
+            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
     ##########################
 
@@ -512,7 +512,7 @@ def main(args):
     wandb.init(project="nerf",
                entity="jonzamora",
                group="official-pytorch",
-               job_type=f"training-iterations={args.n_iters}_netwidth={args.netwidth}")
+               job_type=f"depth_training-iterations={args.n_iters}_netwidth={args.netwidth}")
 
     N_iters = args.n_iters + 1
     print('=> Start Training NeRF')
@@ -634,22 +634,25 @@ def main(args):
             os.makedirs(valsavedir, exist_ok=True)
 
             with torch.no_grad():
-                rgbs, disps = render_path(torch.Tensor(poses[val_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=valsavedir)
+                val_rgbs, val_disps = render_path(torch.Tensor(poses[val_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=valsavedir)
             
-            val_loss = img2mse(torch.Tensor(rgbs).to(args.device), torch.Tensor(val_images).to(args.device))
+            val_loss = img2mse(torch.Tensor(val_rgbs).to(args.device), torch.Tensor(val_images).to(args.device))
             val_psnr = mse2psnr(val_loss)
 
             tqdm.write(f"[VAL] iter={i}, val_loss={val_loss.item()}, val_psnr={val_psnr.item()}")
             wandb.log({"val_loss": val_loss.item(), "val_psnr": val_psnr.item()}, step=global_step)
 
-            wandb.log({"val_render": wandb.Image(image) for image in rgbs}, step=global_step)
+            wandb.log({"val_depth": wandb.Image(image) for image in val_disps}, step=global_step)
+            wandb.log({"val_render": wandb.Image(image) for image in val_rgbs}, step=global_step)
+            
 
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
 
             with torch.no_grad():
-                rgbs, disps = render_path(torch.Tensor(poses[test_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=testsavedir)
-            wandb.log({"test_render": wandb.Image(image) for image in rgbs}, step=global_step)
+                test_rgbs, test_disps = render_path(torch.Tensor(poses[test_split]).to(args.device), hwf, K, args.chunk, render_kwargs_test, savedir=testsavedir)
+            wandb.log({"test_depth": wandb.Image(image) for image in test_disps}, step=global_step)
+            wandb.log({"test_render": wandb.Image(image) for image in test_rgbs}, step=global_step)
 
 
         if i % args.i_print == 0:
