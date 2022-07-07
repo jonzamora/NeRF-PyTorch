@@ -1,25 +1,36 @@
-# ml-collections 🧠 💻
+# NeRF: Neural Radiance Fields for Novel View Synthesis
 
 ---
 
-`ml-collections` contains PyTorch and Tensorflow implementations of various Machine Learning and Deep Learning Models
+Written by Jonathan Zamora
 
-The collections are categorized by their domain, and these domains include:
+## Instructions
 
-1. Computer Vision 👁
-   1. 2D Vision
-   2. 3D Vision
-2. Natural Language Processing 🗣
-   1. Non-Transformer Methods
-   2. Transformer Methods
+You'll first want to create a conda environment via the following commands
 
-This repository will take on a **research focus** by including:
+```
+conda env create -f environment.yaml
+conda activate torch
+```
 
-- Quantitative Case Studies 🔍
-  - Compare methods with prior work (if applicable)
-  - Ablation Studies on Target Task(s)
-  - Measure Generalization on Target Task(s) (i.e. Success and Failure Cases)
-- Written Analyses 📝
-  - Descriptions of the methods
-  - Discussion of findings from case studies
-  - Future work that has been/could be done
+This will ensure you have the proper dependencies for reproducing my experiment results, otherwise, the results may not be consistent. Something else to consider is that my `environment.yaml` file is not minimal, as it contains all my package dependencies for Deep Learning experiments across several domains.
+
+After installing dependencies, you can train a NeRF with the following command:
+
+```
+python src/train.py --config configs/bottles.txt
+```
+
+Rendering results are saved in a `logs` directory, and I use Weights and Biases to log train/val loss curves as well as renderings. The renderings include validation poses and test poses. The constraint with test poses is that we don't have access to the groundtruth images for optimization, so this is where our NeRF does novel view synthesis.
+
+## Notes
+
+Implementations available in both PyTorch [src](src/) and Tensorflow [notebooks](notebooks/nerf_keras.ipynb)
+
+- PyTorch implementation based off of [NeRF-PyTorch](https://github.com/yenchenlin/nerf-pytorch)
+
+- Tensorflow implementation based off of [3D Volumetric Rendering with NeRF](https://keras.io/examples/vision/nerf/)
+
+- This is being tested with a private dataset named "bottles". 
+
+Since this repository implements similar boilerplate methods as included in the NeRF-PyTorch codebase, I have abstracted away the unnecessary components of NeRF-PyTorch and created this minimal and complete version of NeRF.
